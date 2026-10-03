@@ -1,0 +1,143 @@
+<!DOCTYPE html>
+<html lang="it">
+<head>
+  <meta charset="UTF-8">
+  <title>Simulatore Dose Operatore in Emodinamica</title>
+  <style>
+    body { font-family: Arial, sans-serif; background-color: #0f172a; color: #f8fafc; margin: 0; padding: 20px; display: flex; justify-content: center; }
+    .card { background: #1e293b; border-radius: 12px; padding: 20px; max-width: 640px; width: 100%; box-shadow: 0 10px 25px rgba(0,0,0,0.5); border: 1px solid #334155; }
+    h2 { text-align: center; margin-top: 0; color: #38bdf8; }
+    canvas { background: #0f172a; border-radius: 8px; border: 1px solid #334155; display: block; margin: 0 auto 16px auto; width: 100%; height: auto; }
+    .grid { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; margin-bottom: 16px; }
+    .control-box { background: #0f172a; padding: 12px; border-radius: 8px; border: 1px solid #334155; }
+    label { font-size: 13px; font-weight: bold; display: block; margin-bottom: 6px; }
+    input[type=range], select { width: 100%; box-sizing: border-box; }
+    select { padding: 6px; background: #1e293b; color: #fff; border: 1px solid #475569; border-radius: 4px; }
+    .checkboxes { display: flex; flex-direction: column; gap: 6px; font-size: 13px; }
+    .metrics { display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; text-align: center; }
+    .metric-box { background: #0f172a; padding: 10px; border-radius: 8px; border: 1px solid #334155; }
+    .metric-title { font-size: 11px; color: #94a3b8; margin-bottom: 4px; }
+    .metric-value { font-size: 16px; font-weight: bold; }
+  </style>
+</head>
+<body>
+  <div class="card">
+    <h2>Simulatore Dose Operatore in Emodinamica</h2>
+    <canvas id="catlabCanvas" width="600" height="280"></canvas>
+
+    <div class="grid">
+      <div class="control-box">
+        <label>Distanza dall'Isocentro: <span id="distVal" style="color:#38bdf8;">1.0 m</span></label>
+        <input type="range" id="distSlider" min="0.5" max="3.0" step="0.1" value="1.0">
+      </div>
+      <div class="control-box">
+        <label>Modalità Erogazione RX:</label>
+        <select id="modeSelect">
+          <option value="1000">Fluoroscopia (Scopia)</option>
+          <option value="8000">Angiografia (Cine/Grafia)</option>
+        </select>
+      </div>
+    </div>
+
+    <div class="control-box" style="margin-bottom: 16px;">
+      <label>Schermature di Protezione Attive:</label>
+      <div class="checkboxes">
+        <label><input type="checkbox" id="chkScreen" checked> Schermo Pensile in Vetro Piombato (-90%)</label>
+        <label><input type="checkbox" id="chkCurtain" checked> Tendina Piombata Sottotavolo (-85%)</label>
+        <label><input type="checkbox" id="chkApron" checked> Camice Radioprotettivo 0.5mm Pb (-95%)</label>
+      </div>
+    </div>
+
+    <div class="metrics">
+      <div class="metric-box">
+        <div class="metric-title">Dose Aerea Teorica</div>
+        <div id="rawDose" class="metric-value" style="color:#f43f5e;">--</div>
+      </div>
+      <div class="metric-box">
+        <div class="metric-title">Dose Effettiva Operatore</div>
+        <div id="effDose" class="metric-value" style="color:#10b981;">--</div>
+      </div>
+      <div class="metric-box">
+        <div class="metric-title">Abbattimento Totale</div>
+        <div id="attPct" class="metric-value" style="color:#38bdf8;">--</div>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    const canvas = document.getElementById('catlabCanvas');
+    const ctx = canvas.getContext('2d');
+    const slider = document.getElementById('distSlider');
+    const distVal = document.getElementById('distVal');
+    const modeSelect = document.getElementById('modeSelect');
+    const chkScreen = document.getElementById('chkScreen');
+    const chkCurtain = document.getElementById('chkCurtain');
+    const chkApron = document.getElementById('chkApron');
+
+    function updateSimulation() {
+      const dist = parseFloat(slider.value);
+      const baseDose05 = parseFloat(modeSelect.value);
+      distVal.textContent = dist.toFixed(1) + ' m';
+
+      const rawDose = baseDose05 * Math.pow(0.5 / dist, 2);
+      let shieldFactor = 1.0;
+      if (chkScreen.checked) shieldFactor *= 0.10;
+      if (chkCurtain.checked) shieldFactor *= 0.15;
+      if (chkApron.checked) shieldFactor *= 0.05;
+
+      const effDose = rawDose * shieldFactor;
+      const attPct = (1 - (effDose / rawDose)) * 100;
+
+      document.getElementById('rawDose').textContent = rawDose >= 1000 ? (rawDose/1000).toFixed(2) + ' mSv/h' : rawDose.toFixed(1) + ' μSv/h';
+      document.getElementById('effDose').textContent = effDose >= 1000 ? (effDose/1000).toFixed(2) + ' mSv/h' : effDose.toFixed(1) + ' μSv/h';
+      document.getElementById('attPct').textContent = attPct.toFixed(1) + ' %';
+
+      draw(dist, rawDose, chkScreen.checked, chkCurtain.checked);
+    }
+
+    function draw(dist, rawDose, hasScreen, hasCurtain) {
+      ctx.clearRect(0, 0, canvas.width, canvas.height);
+      const isoX = 160, isoY = 140, pxPerMeter = 110;
+
+      // Campo isodose
+      const maxR = 3.0 * pxPerMeter;
+      const grad = ctx.createRadialGradient(isoX, isoY, 10, isoX, isoY, maxR);
+      const intensity = Math.min(1.0, rawDose / 1500);
+      grad.addColorStop(0, `rgba(244, 63, 94, ${0.8 * intensity})`);
+      grad.addColorStop(0.3, `rgba(245, 158, 11, ${0.5 * intensity})`);
+      grad.addColorStop(0.6, `rgba(56, 189, 248, ${0.2 * intensity})`);
+      grad.addColorStop(1, 'rgba(15, 23, 42, 0)');
+      ctx.fillStyle = grad;
+      ctx.beginPath(); ctx.arc(isoX, isoY, maxR, 0, Math.PI * 2); ctx.fill();
+
+      // Anelli distanza
+      [0.5, 1.0, 2.0, 3.0].forEach(r => {
+        ctx.strokeStyle = '#334155'; ctx.setLineDash([4, 4]);
+        ctx.beginPath(); ctx.arc(isoX, isoY, r * pxPerMeter, 0, Math.PI * 2); ctx.stroke();
+        ctx.setLineDash([]); ctx.fillStyle = '#64748b'; ctx.font = '10px sans-serif';
+        ctx.fillText(r + 'm', isoX + r * pxPerMeter - 10, isoY - 5);
+      });
+
+      // Tavolo e Paziente
+      ctx.fillStyle = '#475569'; ctx.fillRect(isoX - 100, isoY - 18, 200, 36);
+      ctx.fillStyle = '#38bdf8'; ctx.beginPath(); ctx.ellipse(isoX, isoY, 45, 14, 0, 0, Math.PI * 2); ctx.fill();
+      ctx.fillStyle = '#0f172a'; ctx.font = 'bold 11px sans-serif'; ctx.textAlign = 'center';
+      ctx.fillText('PAZIENTE', isoX, isoY + 4);
+
+      // Schermi
+      if (hasCurtain) { ctx.strokeStyle = '#eab308'; ctx.lineWidth = 4; ctx.beginPath(); ctx.moveTo(isoX-40, isoY+22); ctx.lineTo(isoX+60, isoY+22); ctx.stroke(); }
+      if (hasScreen) { ctx.strokeStyle = '#06b6d4'; ctx.lineWidth = 5; ctx.beginPath(); ctx.moveTo(isoX+35, isoY-30); ctx.lineTo(isoX+35, isoY+30); ctx.stroke(); }
+
+      // Operatore
+      const opX = isoX + (dist * pxPerMeter);
+      ctx.strokeStyle = '#f8fafc'; ctx.setLineDash([2, 2]); ctx.beginPath(); ctx.moveTo(isoX, isoY); ctx.lineTo(opX, isoY); ctx.stroke();
+      ctx.fillStyle = '#10b981'; ctx.beginPath(); ctx.arc(opX, isoY, 14, 0, Math.PI * 2); ctx.fill();
+      ctx.strokeStyle = '#ffffff'; ctx.lineWidth = 2; ctx.stroke();
+      ctx.fillStyle = '#ffffff'; ctx.font = 'bold 10px sans-serif'; ctx.fillText('OP', opX, isoY + 3);
+    }
+
+    [slider, modeSelect, chkScreen, chkCurtain, chkApron].forEach(el => el.addEventListener('input', updateSimulation));
+    updateSimulation();
+  </script>
+</body>
+</html>
